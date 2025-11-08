@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 4000);
   }
 
-  function createParticipantList(participants) {
+  function createParticipantList(participants, activityName) {
     if (!participants || participants.length === 0) {
       const p = document.createElement("div");
       p.className = "participants-empty";
@@ -25,7 +25,21 @@ document.addEventListener("DOMContentLoaded", () => {
     ul.className = "participants-list";
     participants.forEach((email) => {
       const li = document.createElement("li");
-      li.textContent = email;
+      li.className = "participant-item";
+      // Email span
+      const emailSpan = document.createElement("span");
+      emailSpan.textContent = email;
+      // Delete icon
+      const delBtn = document.createElement("button");
+      delBtn.className = "delete-participant";
+      delBtn.title = "Remove participant";
+      delBtn.innerHTML = "&#128465;"; // Trash can emoji
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        unregisterParticipant(activityName, email, li);
+      });
+      li.appendChild(emailSpan);
+      li.appendChild(delBtn);
       ul.appendChild(li);
     });
     return ul;
@@ -74,7 +88,7 @@ document.addEventListener("DOMContentLoaded", () => {
       participantsHeading.textContent = "Participants";
       participantsSection.appendChild(participantsHeading);
 
-      const listNode = createParticipantList(a.participants || []);
+      const listNode = createParticipantList(a.participants || [], name);
       participantsSection.appendChild(listNode);
 
       card.appendChild(titleWrapper);
@@ -92,16 +106,58 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Fetch and render activities
-  fetch("/activities")
-    .then((res) => {
-      if (!res.ok) throw new Error("Failed to load activities");
-      return res.json();
+  // Unregister participant handler (calls backend API)
+  function unregisterParticipant(activityName, email, liNode) {
+    if (!activityName || !email) return;
+    fetch(`/activities/${encodeURIComponent(activityName)}/unregister`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
     })
-    .then((data) => renderActivities(data))
-    .catch((err) => {
-      activitiesListEl.innerHTML = `<p class="error">Unable to load activities: ${err.message}</p>`;
-    });
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const detail = data.detail || res.statusText;
+          throw new Error(detail);
+        }
+        return res.json();
+      })
+      .then((result) => {
+        showMessage(result.message || `Unregistered ${email}`, "success");
+        liNode.remove();
+        // Update badge
+        const card = liNode.closest('.activity-card');
+        if (card) {
+          const badge = card.querySelector('.participant-count');
+          if (badge) {
+            const parts = badge.textContent.split("/");
+            let current = parseInt(parts[0] || "0", 10);
+            const max = parts[1] || "?";
+            current = isNaN(current) ? 0 : Math.max(0, current - 1);
+            badge.textContent = `${current}/${max}`;
+          }
+        }
+      })
+      .catch((err) => {
+        showMessage(err.message || "Failed to unregister participant", "error");
+      });
+  }
+
+  // Fetch and render activities
+  function fetchAndRenderActivities() {
+    fetch("/activities")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load activities");
+        return res.json();
+      })
+      .then((data) => renderActivities(data))
+      .catch((err) => {
+        activitiesListEl.innerHTML = `<p class="error">Unable to load activities: ${err.message}</p>`;
+      });
+  }
+
+  // Initial load
+  fetchAndRenderActivities();
 
   // Handle signup
   signupForm.addEventListener("submit", (e) => {
@@ -125,39 +181,8 @@ document.addEventListener("DOMContentLoaded", () => {
       })
       .then((result) => {
         showMessage(result.message || "Signed up successfully!", "success");
-        // Update UI: add email to the participants list for that activity
-        // Find the card for the activity
-        const cards = Array.from(document.getElementsByClassName("activity-card"));
-        const matching = cards.find((card) => {
-          const h4 = card.querySelector("h4");
-          return h4 && h4.textContent === activity;
-        });
-        if (matching) {
-          const ul = matching.querySelector(".participants-list");
-          if (ul) {
-            const li = document.createElement("li");
-            li.textContent = email;
-            ul.appendChild(li);
-          } else {
-            // replace "No participants yet" with a new list
-            const empty = matching.querySelector(".participants-empty");
-            const parent = empty ? empty.parentNode : null;
-            if (empty && parent) {
-              const newList = createParticipantList([email]);
-              parent.replaceChild(newList, empty);
-            }
-          }
-          // update count badge
-          const badge = matching.querySelector(".participant-count");
-          if (badge) {
-            // attempt to parse current/ max, increment current
-            const parts = badge.textContent.split("/");
-            let current = parseInt(parts[0] || "0", 10);
-            const max = parts[1] || "?";
-            current = isNaN(current) ? 1 : current + 1;
-            badge.textContent = `${current}/${max}`;
-          }
-        }
+        // Re-fetch and re-render activities to reflect the new participant
+        fetchAndRenderActivities();
         signupForm.reset();
       })
       .catch((err) => {
